@@ -6,6 +6,7 @@ from datetime import datetime
 import json
 import re
 import unicodedata
+import uuid
 
 
 AML = """
@@ -106,18 +107,20 @@ def milliseconds_to_seconds(seconds):
         return int(seconds / 1000.0)  # Convert to seconds
 
 # Define the API endpoints
-login_url = f"{protocol}://{X_DOMAIN}:{X_PORT}/login"
-get_inbounds_url = {1:f"{protocol}://{X_DOMAIN}:{X_PORT}/panel/api/inbounds/list", 2:f"{protocol}://{X_DOMAIN}:{X_PORT}/xui/API/inbounds/"}.get(X_FORK, "Couldnt Find Specified Version")
+login_url = f"{protocol}://{X_DOMAIN}/login"
+get_inbounds_url = {1:f"{protocol}://{X_DOMAIN}/panel/api/inbounds/list", 2:f"{protocol}://{X_DOMAIN}/xui/API/inbounds/"}.get(X_FORK, "Couldnt Find Specified Version")
 
 def x_login(session, username, password):
     login_data = {
         "username": X_USERNAME,
         "password": X_PASSWORD
     }
-    
+
     response = session.post(login_url, data=login_data)
-    
+    print(login_url)
+    print(login_data)
     if response.status_code == 200:
+        print(response.content)
         login_response = response.json()
         if login_response.get("success"):
             print("X-UI Login successful.")
@@ -240,7 +243,24 @@ def get_m_inbounds(session,access_token):
 
 def add_m_user(session, access_token,protocoll, uuid, email, traffic, expiretime, inbounds):
     use_protocol = 'https' if M_HTTPS else 'http'
+    url = f'{use_protocol}://{M_DOMAIN}:{M_PORT}/api/user/{email}'
+    headers = {
+        'accept': 'application/json',
+        'Authorization': f'Bearer {access_token}',
+        'Content-Type': 'application/json'
+    }
+
+    try:
+        response = session.delete(url, headers=headers)
+        response.raise_for_status()
+        user_details = response.json()
+        print('Удален пользователь ' + email)
+    except requests.exceptions.RequestException as e:
+        pass
+
+    use_protocol = 'https' if M_HTTPS else 'http'
     url = f'{use_protocol}://{M_DOMAIN}:{M_PORT}/api/user'
+
     data = {
         "username": email,
         "proxies": {
@@ -255,9 +275,6 @@ def add_m_user(session, access_token,protocoll, uuid, email, traffic, expiretime
         },
         "inbounds": {
         },
-        "expire": expiretime,
-        "data_limit": traffic,
-        "data_limit_reset_strategy": "no_reset"
     }
 
 
@@ -304,6 +321,16 @@ def add_m_user(session, access_token,protocoll, uuid, email, traffic, expiretime
     
     try:
         response = session.post(url, json=data, headers=headers)
+
+        status = 'active'
+        now = datetime.now()
+        if expiretime <= now.timestamp():
+            data = {"status": "disabled"}
+            url = f'{use_protocol}://{M_DOMAIN}:{M_PORT}/api/user/{email}'
+            response = session.put(url, json=data, headers=headers)
+            if response.status_code == 200:
+                print(f"Пользователь деактивирован")
+
         response.raise_for_status()
         user_status = response.json()
         return user_status
@@ -400,8 +427,9 @@ def add_m_custom_user(session, access_token,protocoll, uuid, email, traffic, exp
 
 def add_m_users(session, access_token, users, inbound_names):
     for user in users:
-        protocoll, uuid, email, expiretime, traffic = user
-        user_status = add_m_user(session, access_token, protocoll, uuid, email, traffic, expiretime, inbound_names)
+        protocoll, uuidstr, email, expiretime, traffic = user
+        generated_uuid = uuid.uuid4()
+        user_status = add_m_user(session, access_token, protocoll, str(generated_uuid), email, traffic, expiretime, inbound_names)
         if user_status:
             print(f"User {email} added successfully.")
         else:
