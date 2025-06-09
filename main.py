@@ -7,6 +7,9 @@ import json
 import re
 import unicodedata
 import uuid
+import time
+from requests.adapters import HTTPAdapter
+from urllib3.util.retry import Retry
 
 
 AML = """
@@ -243,7 +246,7 @@ def get_m_inbounds(session,access_token):
 
 def add_m_user(session, access_token,protocoll, uuid, email, traffic, expiretime, inbounds):
     use_protocol = 'https' if M_HTTPS else 'http'
-    url = f'{use_protocol}://{M_DOMAIN}:{M_PORT}/api/user/{email}'
+    url = f"{use_protocol}://{M_DOMAIN}:{M_PORT}/api/user/{email}"
     headers = {
         'accept': 'application/json',
         'Authorization': f'Bearer {access_token}',
@@ -251,6 +254,7 @@ def add_m_user(session, access_token,protocoll, uuid, email, traffic, expiretime
     }
 
     try:
+        print('Удаляется пользователь ' + email)
         response = session.delete(url, headers=headers)
         response.raise_for_status()
         user_details = response.json()
@@ -259,7 +263,7 @@ def add_m_user(session, access_token,protocoll, uuid, email, traffic, expiretime
         pass
 
     use_protocol = 'https' if M_HTTPS else 'http'
-    url = f'{use_protocol}://{M_DOMAIN}:{M_PORT}/api/user'
+    url = f"{use_protocol}://{M_DOMAIN}:{M_PORT}/api/user"
 
     data = {
         "username": email,
@@ -321,33 +325,40 @@ def add_m_user(session, access_token,protocoll, uuid, email, traffic, expiretime
     
     try:
         response = session.post(url, json=data, headers=headers)
+        time.sleep(0.1)
+    except requests.exceptions.RequestException as e:
+            print(str(e))
+            return None
 
+    try:
         status = 'active'
         now = datetime.now()
         if expiretime <= now.timestamp():
             data = {"status": "disabled"}
-            url = f'{use_protocol}://{M_DOMAIN}:{M_PORT}/api/user/{email}'
-            response = session.put(url, json=data, headers=headers)
+            url = f"{use_protocol}://{M_DOMAIN}:{M_PORT}/api/user/{email}"
+            print('Деактивируется пользователь ' + email)
+
+            retry_strategy = Retry(
+                total=5,  # Количество попыток
+                backoff_factor=1,  # Задержка между попытками (в секундах)
+                method_whitelist=["PUT"]  # Методы, для которых применяются повторные попытки
+            )
+            adapter = HTTPAdapter(max_retries=retry_strategy)
+            session.mount("https://", adapter)
+            session.mount("http://", adapter)
+
+            response = session.put(url, json=data, headers=headers, timeout=30)
+            print(response.content)
             if response.status_code == 200:
                 print(f"Пользователь деактивирован")
 
         response.raise_for_status()
         user_status = response.json()
-        return user_status
     except requests.exceptions.RequestException as e:
-        logging.error(f'Error occurred while adding user: {e}')
-        if response.status_code == 409:
-            for i in range(3):
-                print(f"Sending Request Failed,Username Already Exists, Changing Username and Trying Again. Attempt Number {i+1}...")
-                data["username"] = f"{email}{i+1}"
-                response = session.post(url,json=data, headers=headers)
-                if response.status_code == 200:
-                    print(f"Username Has Been Changed to {data['username']}")
-                    with open("username_changelog.txt", "a+") as f:
-                        f.write(f"{email} ==> {data['username']}\n")
-                    return response.json()
-                    break
-        return None
+        print(str(e))
+
+    return True
+
 
 def add_m_custom_user(session, access_token,protocoll, uuid, email, traffic, expiretime, inbounds, flow):
     use_protocol = 'https' if M_HTTPS else 'http'
@@ -428,7 +439,7 @@ def add_m_custom_user(session, access_token,protocoll, uuid, email, traffic, exp
 def add_m_users(session, access_token, users, inbound_names):
     for user in users:
         protocoll, uuidstr, email, expiretime, traffic = user
-        generated_uuid = uuid.uuid4()
+        generated_uuid = email
         user_status = add_m_user(session, access_token, protocoll, str(generated_uuid), email, traffic, expiretime, inbound_names)
         if user_status:
             print(f"User {email} added successfully.")
